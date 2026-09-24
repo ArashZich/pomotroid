@@ -22,5 +22,9 @@ overwriteGetLocale(() => currentLocale);
 export function setLocale(language: string): void {
   const resolved = resolveLocale(language) as SupportedLocale;
   currentLocale = resolved;
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = resolved;
+    document.documentElement.dir = resolved === 'fa' ? 'rtl' : 'ltr';
+  }
   info(`[locale] locale set to ${resolved}`).catch(() => {});
 }

@@ -174,9 +174,13 @@
   <!-- Content -->
   <div class="content">
     {#if activeTab === 'today'}
-      <DailyView today={detailed?.today ?? null} />
+      <DailyView today={detailed?.today ?? null} summary={detailed?.work_summary ?? null} />
     {:else if activeTab === 'week'}
-      <WeeklyView week={detailed?.week ?? null} streak={detailed?.streak ?? null} />
+      <WeeklyView
+        week={detailed?.week ?? null}
+        streak={detailed?.streak ?? null}
+        summary={detailed?.work_summary ?? null}
+      />
     {:else}
       <YearlyView {heatmap} />
     {/if}

@@ -104,10 +104,61 @@ pub struct HeatmapEntry {
     pub count: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct StreakInfo {
     pub current: u32,
     pub longest: u32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkSummary {
+    pub today_work_secs: i64,
+    pub today_rounds: u32,
+    pub week_work_secs: i64,
+    pub week_rounds: u32,
+    pub month_work_secs: i64,
+    pub month_rounds: u32,
+}
+
+/// Aggregated total work time and rounds for today, past 7 days, and past 30 days.
+pub fn get_work_summary(conn: &Connection) -> Result<WorkSummary> {
+    let today: String = conn.query_row("SELECT date('now', 'localtime')", [], |r| r.get(0))?;
+
+    let (today_rounds, today_work_secs): (u32, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(duration_secs), 0)
+         FROM sessions
+         WHERE round_type = 'work' AND completed = 1
+         AND date(started_at, 'unixepoch', 'localtime') = ?1",
+        [&today],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    let (week_rounds, week_work_secs): (u32, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(duration_secs), 0)
+         FROM sessions
+         WHERE round_type = 'work' AND completed = 1
+         AND date(started_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-6 days')",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    let (month_rounds, month_work_secs): (u32, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(duration_secs), 0)
+         FROM sessions
+         WHERE round_type = 'work' AND completed = 1
+         AND date(started_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-29 days')",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    Ok(WorkSummary {
+        today_work_secs,
+        today_rounds,
+        week_work_secs,
+        week_rounds,
+        month_work_secs,
+        month_rounds,
+    })
 }
 
 /// Completed work rounds and focus time for today (local calendar date).

@@ -351,7 +351,21 @@ pub fn stats_get_detailed(db: State<'_, DbState>) -> Result<DetailedStats, Strin
         log::error!("[stats] failed to query streak: {e}");
         e.to_string()
     })?;
-    Ok(DetailedStats { today, week, streak })
+    let work_summary = queries::get_work_summary(&conn).map_err(|e| {
+        log::error!("[stats] failed to query work summary: {e}");
+        e.to_string()
+    })?;
+    Ok(DetailedStats { today, week, streak, work_summary })
+}
+
+/// Summary of total work time and rounds for Day, Week, and Month.
+#[tauri::command]
+pub fn stats_get_work_summary(db: State<'_, DbState>) -> Result<queries::WorkSummary, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    queries::get_work_summary(&conn).map_err(|e| {
+        log::error!("[stats] failed to query work summary: {e}");
+        e.to_string()
+    })
 }
 
 /// Heatmap data + lifetime totals for the All Time tab.
@@ -736,6 +750,7 @@ pub struct DetailedStats {
     pub today: queries::DailyStats,
     pub week: Vec<queries::DayStat>,
     pub streak: queries::StreakInfo,
+    pub work_summary: queries::WorkSummary,
 }
 
 /// Payload for the All Time tab.

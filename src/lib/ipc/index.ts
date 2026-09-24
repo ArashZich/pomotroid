@@ -11,6 +11,7 @@ import type {
   CustomAudioInfo,
   DetailedStats,
   HeatmapStats,
+  WorkSummary,
   UpdateInfo,
 } from '$lib/types';
 
@@ -85,6 +86,9 @@ export const statsGetDetailed = () => invoke<DetailedStats>('stats_get_detailed'
 
 /** Heatmap entries + lifetime totals (All Time tab). */
 export const statsGetHeatmap = () => invoke<HeatmapStats>('stats_get_heatmap');
+
+/** Aggregated total work time for Today, This Week, and This Month. */
+export const statsGetWorkSummary = () => invoke<WorkSummary>('stats_get_work_summary');
 
 // --- Platform commands ---
 

@@ -23,6 +23,22 @@
   font-display: block;
 }
 
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   /* Theme colors (defaults; overridden by the active theme at runtime) */
   --color-long-round: #c75000;
@@ -63,10 +79,22 @@ body {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  font-family: 'Mona Sans', system-ui, sans-serif;
+  font-family: 'Vazirmatn', 'Mona Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   background-color: var(--color-background);
   color: var(--color-foreground);
   user-select: none;
+}
+
+:root[dir='rtl'] {
+  direction: rtl;
+  text-align: right;
+}
+
+:root[dir='rtl'] .dial-stack,
+:root[dir='rtl'] .timer,
+:root[dir='rtl'] .display-time,
+:root[dir='rtl'] .timer-display {
+  direction: ltr;
 }
 
 /* ---------------------------------------------------------------------------

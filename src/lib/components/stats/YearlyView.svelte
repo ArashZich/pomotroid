@@ -2,8 +2,16 @@
   import type { HeatmapStats, HeatmapEntry } from '$lib/types';
   import * as m from '$paraglide/messages.js';
   import { getLocale } from '$paraglide/runtime.js';
+  import {
+    toPersianDigits,
+    formatJalaliDate,
+    toJalali,
+    PERSIAN_MONTH_NAMES,
+  } from '$lib/utils/jalali';
 
   let { heatmap }: { heatmap: HeatmapStats | null } = $props();
+
+  const isPersian = $derived(getLocale() === 'fa');
 
   // Heatmap grid constants
   const CELL = 11;
@@ -16,14 +24,24 @@
   const monthFmt = $derived(new Intl.DateTimeFormat(getLocale(), { month: 'short' }));
   const dowFmt = $derived(new Intl.DateTimeFormat(getLocale(), { weekday: 'short' }));
   const MONTH_NAMES: string[] = $derived(
-    Array.from({ length: 12 }, (_, i) => monthFmt.format(new Date(2000, i, 1)))
+    isPersian
+      ? (PERSIAN_MONTH_NAMES as unknown as string[])
+      : Array.from({ length: 12 }, (_, i) => monthFmt.format(new Date(2000, i, 1)))
   );
-  // Row labels: Mon (row 1), Wed (row 3), Fri (row 5) — reference dates that land on those days
-  const ROW_LABELS: Record<number, string> = $derived({
-    1: dowFmt.format(new Date(2000, 0, 3)), // Monday
-    3: dowFmt.format(new Date(2000, 0, 5)), // Wednesday
-    5: dowFmt.format(new Date(2000, 0, 7)), // Friday
-  });
+  // Row labels: Mon (row 1), Wed (row 3), Fri (row 5) — or Sat/Mon/Wed in Persian
+  const ROW_LABELS = $derived<Record<number, string>>(
+    isPersian
+      ? {
+          0: 'ش',
+          2: 'د',
+          4: 'چ',
+        }
+      : {
+          1: dowFmt.format(new Date(2000, 0, 3)), // Monday
+          3: dowFmt.format(new Date(2000, 0, 5)), // Wednesday
+          5: dowFmt.format(new Date(2000, 0, 7)), // Friday
+        }
+  );
 
   // Year navigation state
   const currentYear = new Date().getFullYear();
@@ -87,7 +105,7 @@
 
       // Month label when the first cell of the week belongs to the selected year and starts a new month
       const firstDate = new Date(col[0].date + 'T00:00:00');
-      const month = firstDate.getMonth();
+      const month = isPersian ? toJalali(firstDate).jm - 1 : firstDate.getMonth();
       if (firstDate.getFullYear() === year && month !== lastMonth) {
         months.push({ x: w * STRIDE, label: MONTH_NAMES[month] });
         lastMonth = month;
@@ -108,7 +126,12 @@
   }
 
   function fmtHours(h: number): string {
+    if (isPersian) return `${toPersianDigits(h)} س`;
     return h >= 1000 ? `${(h / 1000).toFixed(1)}k` : String(h);
+  }
+
+  function fmtVal(n: number | string): string {
+    return isPersian ? toPersianDigits(n) : String(n);
   }
 
   const LEVEL_FILL = ['var(--heat-0)', 'var(--heat-1)', 'var(--heat-2)', 'var(--heat-3)'] as const;
@@ -123,10 +146,12 @@
       return;
     }
     const cellRect = (event.currentTarget as SVGRectElement).getBoundingClientRect();
+    const dateFormatted = isPersian ? formatJalaliDate(cell.date, 'full') : cell.date;
+    const countFormatted = isPersian ? toPersianDigits(cell.count) : String(cell.count);
     const text =
       cell.count === 0
-        ? `${cell.date}: ${m.stats_no_sessions_today().toLowerCase()}`
-        : `${cell.date}: ${cell.count} ${cell.count === 1 ? m.stats_rounds().toLowerCase().replace(/s$/, '') : m.stats_rounds().toLowerCase()}`;
+        ? `${dateFormatted}: ${m.stats_no_sessions_today().toLowerCase()}`
+        : `${dateFormatted}: ${countFormatted} ${m.stats_rounds().toLowerCase()}`;
     tooltip = { x: cellRect.left + CELL / 2, y: cellRect.top - 8, text };
   }
 
@@ -184,7 +209,11 @@
               />
             </svg>
           </button>
-          <span class="year-label">{selectedYear}</span>
+          <span class="year-label"
+            >{isPersian
+              ? toPersianDigits(toJalali(new Date(selectedYear, 6, 1)).jy)
+              : selectedYear}</span
+          >
           <button
             class="year-btn"
             onclick={() => {
@@ -289,7 +318,7 @@
     <div class="totals">
       <div class="total-card" style="--delay: 0ms">
         <span class="total-label">{m.stats_total_rounds()}</span>
-        <span class="total-value">{heatmap.total_rounds.toLocaleString()}</span>
+        <span class="total-value">{fmtVal(heatmap.total_rounds.toLocaleString())}</span>
       </div>
       <div class="total-divider"></div>
       <div class="total-card" style="--delay: 60ms">
@@ -300,7 +329,7 @@
       <div class="total-card" style="--delay: 120ms">
         <span class="total-label">{m.stats_best_streak()}</span>
         <span class="total-value">
-          {heatmap.longest_streak > 0 ? heatmap.longest_streak : '—'}
+          {heatmap.longest_streak > 0 ? fmtVal(heatmap.longest_streak) : '—'}
           {#if heatmap.longest_streak > 0}
             <span class="total-unit">{m.stats_days()}</span>
           {/if}

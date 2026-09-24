@@ -106,11 +106,21 @@ export interface StreakInfo {
   longest: number;
 }
 
+export interface WorkSummary {
+  today_work_secs: number;
+  today_rounds: number;
+  week_work_secs: number;
+  week_rounds: number;
+  month_work_secs: number;
+  month_rounds: number;
+}
+
 /** Returned by stats_get_detailed — Today + This Week + streak in one call. */
 export interface DetailedStats {
   today: DailyStats;
   week: DayStat[];
   streak: StreakInfo;
+  work_summary: WorkSummary;
 }
 
 /** Returned by stats_get_heatmap — heatmap entries + lifetime totals. */

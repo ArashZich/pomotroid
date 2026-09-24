@@ -23,8 +23,11 @@
   import Tooltip from './Tooltip.svelte';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import * as m from '$paraglide/messages.js';
-  import { notificationShow } from '$lib/ipc';
+  import { notificationShow, statsGetWorkSummary, onSessionsCleared } from '$lib/ipc';
   import { openBreakShield, closeBreakShield } from '$lib/utils/breakShield';
+  import { getLocale } from '$paraglide/runtime.js';
+  import { formatWorkDuration } from '$lib/utils/jalali';
+  import type { WorkSummary } from '$lib/types';
 
   interface Props {
     isCompact?: boolean;
@@ -33,7 +36,7 @@
 
   let { isCompact = false, uiScale = 1 }: Props = $props();
 
-  let state = $derived($timerState);
+  let snap = $derived($timerState);
 
   function roundColor(rt: string): string {
     if (rt === 'work') return 'var(--color-focus-round)';
@@ -47,6 +50,34 @@
     return m.round_label_long_break();
   }
 
+  let workSummary = $state<WorkSummary | null>(null);
+
+  const isPersian = $derived(getLocale() === 'fa');
+
+  // Compute live today total work seconds:
+  const liveTodaySecs = $derived.by(() => {
+    const base = workSummary?.today_work_secs ?? 0;
+    if (snap.round_type === 'work' && snap.is_running) {
+      return base + snap.elapsed_secs;
+    }
+    return base;
+  });
+
+  const todayFmt = $derived(formatWorkDuration(liveTodaySecs, isPersian));
+  const weekFmt = $derived(formatWorkDuration(workSummary?.week_work_secs ?? 0, isPersian));
+  const monthFmt = $derived(formatWorkDuration(workSummary?.month_work_secs ?? 0, isPersian));
+  const summaryTooltip = $derived(
+    `${m.stats_work_today()}: ${todayFmt} • ${m.stats_work_week()}: ${weekFmt} • ${m.stats_work_month()}: ${monthFmt}`
+  );
+
+  async function refreshSummary() {
+    try {
+      workSummary = await statsGetWorkSummary();
+    } catch {
+      // ignore
+    }
+  }
+
   onMount(() => {
     const cleanups: UnlistenFn[] = [];
 
@@ -54,8 +85,10 @@
     (async () => {
       const initial = await getTimerState();
       timerState.set(initial);
+      await refreshSummary();
 
       cleanups.push(
+        await onSessionsCleared(refreshSummary),
         await onTimerTick(({ elapsed_secs, total_secs }) => {
           timerState.update((s) => ({
             ...s,
@@ -83,6 +116,7 @@
         }),
         await onRoundChange((snap) => {
           timerState.set(snap);
+          refreshSummary();
           if (snap.round_type === 'short-break' || snap.round_type === 'long-break') {
             if ($settings.fullscreen_break_shield) {
               openBreakShield();
@@ -112,6 +146,7 @@
         }),
         await onTimerReset((snap) => {
           timerState.set(snap);
+          refreshSummary();
           closeBreakShield();
         })
       );
@@ -127,15 +162,15 @@
   <div class="timer" style="zoom: {uiScale}">
     <!-- Dial + display stacked (display centered over dial) -->
     <div class="dial-stack">
-      <TimerDial snap={state} countdown={$settings.dial_countdown} />
-      <TimerDisplay {state} />
+      <TimerDial {snap} countdown={$settings.dial_countdown} />
+      <TimerDisplay state={snap} />
     </div>
 
     {#if !isCompact}
       <!-- Round type label sits below the dial as a normal flex child so it
            does not affect the dial-stack height used to centre TimerDisplay. -->
-      <div class="round-label" style="color: {roundColor(state.round_type)}">
-        {roundLabel(state.round_type)}
+      <div class="round-label" style="color: {roundColor(snap.round_type)}">
+        {roundLabel(snap.round_type)}
       </div>
 
       <div class="controls-wrapper">
@@ -153,11 +188,11 @@
         <button
           class="play-pause"
           onclick={timerToggle}
-          aria-label={state.is_running ? 'Pause' : 'Play'}
+          aria-label={snap.is_running ? 'Pause' : 'Play'}
         >
-          {#key state.is_running}
+          {#key snap.is_running}
             <span class="icon" in:fade={{ duration: 120 }}>
-              {#if state.is_running}
+              {#if snap.is_running}
                 <svg width="24" height="24" viewBox="0 0 24 24">
                   <rect x="5" y="3" width="5" height="18" rx="1.5" fill="currentColor" />
                   <rect x="14" y="3" width="5" height="18" rx="1.5" fill="currentColor" />
@@ -181,8 +216,15 @@
           </button>
         </Tooltip>
 
-        <TimerFooter snap={state} />
+        <TimerFooter {snap} />
       </div>
+
+      {#if liveTodaySecs > 0}
+        <div class="today-work-pill" title={summaryTooltip}>
+          <span class="pill-dot"></span>
+          <span class="pill-text">{m.timer_today_total({ time: todayFmt })}</span>
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -192,6 +234,37 @@
 </div>
 
 <style>
+  .today-work-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: color-mix(in oklch, var(--color-foreground) 6%, transparent);
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--color-foreground-darker);
+    cursor: default;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .today-work-pill:hover {
+    background: color-mix(in oklch, var(--color-foreground) 10%, transparent);
+    color: var(--color-foreground);
+  }
+
+  .pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-focus-round);
+    flex-shrink: 0;
+  }
+
+  .pill-text {
+    line-height: 1;
+  }
+
   .timer-outer {
     display: flex;
     flex-direction: column;
