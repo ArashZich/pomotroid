@@ -20,5 +20,8 @@ pub fn open(app_data_dir: &std::path::Path) -> Result<DbState> {
 
     migrations::run(&conn)?;
 
+    // Sessions still open belong to a previous run that quit mid-round.
+    queries::close_open_sessions(&conn)?;
+
     Ok(Arc::new(Mutex::new(conn)))
 }

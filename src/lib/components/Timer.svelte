@@ -54,10 +54,11 @@
 
   const isPersian = $derived(getLocale() === 'fa');
 
-  // Compute live today total work seconds:
+  // Compute live today total work seconds. The summary only covers finished
+  // sessions, so add the current work round's progress (running or paused).
   const liveTodaySecs = $derived.by(() => {
     const base = workSummary?.today_work_secs ?? 0;
-    if (snap.round_type === 'work' && snap.is_running) {
+    if (snap.round_type === 'work' && snap.elapsed_secs > 0) {
       return base + snap.elapsed_secs;
     }
     return base;

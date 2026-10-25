@@ -281,6 +281,12 @@ fn listen_events(
                     }
                 }
 
+                // Persist progress periodically so a quit or crash mid-round
+                // loses at most a few seconds of tracked time.
+                if elapsed_secs % SESSION_SAVE_INTERVAL_SECS == 0 {
+                    save_session_progress(&db, current_session_id, elapsed_secs);
+                }
+
                 // --- Tick sound ---
                 let rt = sequence.lock().unwrap().current_round.as_str().to_string();
                 if let Some(audio) = app.try_state::<Arc<AudioManager>>() {
@@ -309,8 +315,9 @@ fn listen_events(
 
                 // --- Session recording: mark the completed round ---
                 if let Some(session_id) = current_session_id.take() {
+                    let elapsed = shared.lock().unwrap().elapsed_secs;
                     if let Ok(conn) = db.lock() {
-                        let _ = queries::complete_session(&conn, session_id, !was_skipped);
+                        let _ = queries::complete_session(&conn, session_id, !was_skipped, elapsed);
                     }
                 }
 
@@ -401,6 +408,7 @@ fn listen_events(
             TimerEvent::Paused { elapsed_secs } => {
                 log::info!("[timer] paused elapsed={elapsed_secs}s");
                 shared.lock().unwrap().is_running = false;
+                save_session_progress(&db, current_session_id, elapsed_secs);
                 let _ = app.emit("timer:paused", serde_json::json!({ "elapsed_secs": elapsed_secs }));
                 if let Some(ws) = app.try_state::<Arc<WsState>>() {
                     websocket::broadcast_paused(&ws, elapsed_secs);
@@ -441,8 +449,13 @@ fn listen_events(
 
             TimerEvent::Reset => {
                 log::debug!("[timer] idle");
-                // Abandon the active session (leave DB row as-is).
-                current_session_id = None;
+                // End the active session, keeping the time spent so far.
+                if let Some(session_id) = current_session_id.take() {
+                    let elapsed = shared.lock().unwrap().elapsed_secs;
+                    if let Ok(conn) = db.lock() {
+                        let _ = queries::complete_session(&conn, session_id, false, elapsed);
+                    }
+                }
 
                 {
                     let mut s = shared.lock().unwrap();
@@ -477,6 +490,7 @@ fn listen_events(
             TimerEvent::Suspended { elapsed_secs } => {
                 log::info!("[timer] suspended by system elapsed={elapsed_secs}s");
                 shared.lock().unwrap().is_running = false;
+                save_session_progress(&db, current_session_id, elapsed_secs);
                 let _ = app.emit(
                     "timer:suspended",
                     serde_json::json!({ "elapsed_secs": elapsed_secs }),
@@ -492,6 +506,18 @@ fn listen_events(
                 let progress = if total > 0 { elapsed_secs as f32 / total as f32 } else { 0.0 };
                 tray::update_icon(&tray, &rt, true, progress);
             }
+        }
+    }
+}
+
+/// How often (in timer seconds) a running session's progress is written to the DB.
+const SESSION_SAVE_INTERVAL_SECS: u32 = 10;
+
+fn save_session_progress(db: &DbState, session_id: Option<i64>, elapsed_secs: u32) {
+    let Some(id) = session_id else { return };
+    if let Ok(conn) = db.lock() {
+        if let Err(e) = queries::update_session_elapsed(&conn, id, elapsed_secs) {
+            log::error!("[timer] failed to save session progress: {e}");
         }
     }
 }

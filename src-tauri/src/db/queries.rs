@@ -23,18 +23,40 @@ pub fn insert_session(
     Ok(id)
 }
 
-/// Updates a session when the round ends (by completion or skip).
+/// Updates a session when the round ends (by completion, skip or reset).
+/// `elapsed_secs` is the time actually spent in the round.
 pub fn complete_session(
     conn: &Connection,
     session_id: i64,
     completed: bool,
+    elapsed_secs: u32,
 ) -> Result<()> {
     conn.execute(
-        "UPDATE sessions SET ended_at = ?1, completed = ?2 WHERE id = ?3",
-        params![unix_now(), completed as i64, session_id],
+        "UPDATE sessions SET ended_at = ?1, completed = ?2, elapsed_secs = ?3 WHERE id = ?4",
+        params![unix_now(), completed as i64, elapsed_secs, session_id],
     )?;
-    log::debug!("[db] session ended: id={session_id} completed={completed}");
+    log::debug!(
+        "[db] session ended: id={session_id} completed={completed} elapsed={elapsed_secs}s"
+    );
     Ok(())
+}
+
+/// Persists progress of a running session so it survives a quit or crash.
+pub fn update_session_elapsed(conn: &Connection, session_id: i64, elapsed_secs: u32) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET elapsed_secs = ?1 WHERE id = ?2",
+        params![elapsed_secs, session_id],
+    )?;
+    Ok(())
+}
+
+/// Closes sessions left open by a previous run (app quit or crash mid-round),
+/// keeping the progress last saved for them.
+pub fn close_open_sessions(conn: &Connection) -> Result<usize> {
+    conn.execute(
+        "UPDATE sessions SET ended_at = started_at + elapsed_secs WHERE ended_at IS NULL",
+        [],
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -45,7 +67,7 @@ pub fn complete_session(
 pub struct SessionStats {
     pub total_work_sessions: i64,
     pub completed_work_sessions: i64,
-    /// Sum of duration_secs for all *completed* work sessions.
+    /// Time actually spent in all finished work sessions (incl. skipped/reset).
     pub total_work_secs: i64,
 }
 
@@ -63,8 +85,8 @@ pub fn get_all_time_stats(conn: &Connection) -> Result<SessionStats> {
     )?;
 
     let total_work_secs: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(duration_secs), 0)
-         FROM sessions WHERE round_type = 'work' AND completed = 1",
+        "SELECT COALESCE(SUM(elapsed_secs), 0)
+         FROM sessions WHERE round_type = 'work' AND ended_at IS NOT NULL",
         [],
         |r| r.get(0),
     )?;
@@ -125,27 +147,27 @@ pub fn get_work_summary(conn: &Connection) -> Result<WorkSummary> {
     let today: String = conn.query_row("SELECT date('now', 'localtime')", [], |r| r.get(0))?;
 
     let (today_rounds, today_work_secs): (u32, i64) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(duration_secs), 0)
+        "SELECT COALESCE(SUM(completed), 0), COALESCE(SUM(elapsed_secs), 0)
          FROM sessions
-         WHERE round_type = 'work' AND completed = 1
+         WHERE round_type = 'work' AND ended_at IS NOT NULL
          AND date(started_at, 'unixepoch', 'localtime') = ?1",
         [&today],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
 
     let (week_rounds, week_work_secs): (u32, i64) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(duration_secs), 0)
+        "SELECT COALESCE(SUM(completed), 0), COALESCE(SUM(elapsed_secs), 0)
          FROM sessions
-         WHERE round_type = 'work' AND completed = 1
+         WHERE round_type = 'work' AND ended_at IS NOT NULL
          AND date(started_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-6 days')",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
 
     let (month_rounds, month_work_secs): (u32, i64) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(duration_secs), 0)
+        "SELECT COALESCE(SUM(completed), 0), COALESCE(SUM(elapsed_secs), 0)
          FROM sessions
-         WHERE round_type = 'work' AND completed = 1
+         WHERE round_type = 'work' AND ended_at IS NOT NULL
          AND date(started_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-29 days')",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
@@ -186,8 +208,8 @@ pub fn get_daily_stats(conn: &Connection) -> Result<DailyStats> {
     )?;
 
     let focus_secs: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(duration_secs), 0) FROM sessions
-         WHERE round_type = 'work' AND completed = 1
+        "SELECT COALESCE(SUM(elapsed_secs), 0) FROM sessions
+         WHERE round_type = 'work' AND ended_at IS NOT NULL
          AND date(started_at, 'unixepoch', 'localtime') = ?1",
         [&today],
         |r| r.get(0),
@@ -364,7 +386,7 @@ mod tests {
         let id = insert_session(&conn, "work", 1500).unwrap();
         assert!(id > 0);
 
-        complete_session(&conn, id, true).unwrap();
+        complete_session(&conn, id, true, 1500).unwrap();
 
         let completed: i64 = conn
             .query_row(
@@ -457,21 +479,21 @@ mod tests {
 
         // 339 s = 5:39 → rounds up to 6 min (remainder 39 ≥ 30).
         let id1 = insert_session(&conn, "work", 339).unwrap();
-        complete_session(&conn, id1, true).unwrap();
+        complete_session(&conn, id1, true, 339).unwrap();
         let stats = get_daily_stats(&conn).unwrap();
         assert_eq!(stats.focus_mins, 6, "339 s should round to 6 min");
 
         // Reset and test round-down: 324 s = 5:24 → rounds down to 5 min (remainder 24 < 30).
         let conn2 = setup();
         let id2 = insert_session(&conn2, "work", 324).unwrap();
-        complete_session(&conn2, id2, true).unwrap();
+        complete_session(&conn2, id2, true, 324).unwrap();
         let stats2 = get_daily_stats(&conn2).unwrap();
         assert_eq!(stats2.focus_mins, 5, "324 s should round to 5 min");
 
         // Exact minute boundary: 1500 s = 25:00 → stays 25 min.
         let conn3 = setup();
         let id3 = insert_session(&conn3, "work", 1500).unwrap();
-        complete_session(&conn3, id3, true).unwrap();
+        complete_session(&conn3, id3, true, 1500).unwrap();
         let stats3 = get_daily_stats(&conn3).unwrap();
         assert_eq!(stats3.focus_mins, 25, "1500 s should be exactly 25 min");
     }
@@ -481,16 +503,33 @@ mod tests {
         let conn = setup();
 
         let id1 = insert_session(&conn, "work", 1500).unwrap();
-        complete_session(&conn, id1, true).unwrap();
+        complete_session(&conn, id1, true, 1500).unwrap();
 
         let id2 = insert_session(&conn, "work", 1500).unwrap();
-        complete_session(&conn, id2, false).unwrap(); // skipped
+        complete_session(&conn, id2, false, 600).unwrap(); // skipped after 10 min
 
         let _id3 = insert_session(&conn, "short-break", 300).unwrap();
 
         let stats = get_all_time_stats(&conn).unwrap();
         assert_eq!(stats.total_work_sessions, 2);
         assert_eq!(stats.completed_work_sessions, 1);
-        assert_eq!(stats.total_work_secs, 1500);
+        // Skipped round still counts the 10 minutes actually worked.
+        assert_eq!(stats.total_work_secs, 2100);
+    }
+
+    #[test]
+    fn interrupted_session_counts_saved_progress() {
+        let conn = setup();
+        let id = insert_session(&conn, "work", 1500).unwrap();
+        update_session_elapsed(&conn, id, 900).unwrap();
+
+        // Still open: not counted yet (the frontend adds live progress).
+        assert_eq!(get_work_summary(&conn).unwrap().today_work_secs, 0);
+
+        // App restarted mid-round: open session is closed with saved progress.
+        assert_eq!(close_open_sessions(&conn).unwrap(), 1);
+        let summary = get_work_summary(&conn).unwrap();
+        assert_eq!(summary.today_work_secs, 900);
+        assert_eq!(summary.today_rounds, 0);
     }
 }
